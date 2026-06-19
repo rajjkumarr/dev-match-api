@@ -1,5 +1,6 @@
 const { Server } = require('socket.io');
 const { getOrCreateDirectConversation, saveMessage } = require('../services/chat.service');
+const { setOnline, setOffline, refreshHeartbeat, getOnlineContactSocketIds } = require('../services/status.service');
 
 let io;
 
@@ -12,11 +13,27 @@ const initSocket = (httpServer) => {
     },
   });
 
-  io.on('connection', (socket) => {
-    console.log(`Socket connected: ${socket.id}`);
+  io.on('connection', async (socket) => {
+    const userId = socket.handshake.query.userId;
+    console.log(`Socket connected: ${socket.id} | user: ${userId}`);
+    console.log(userId,socket.id,socket.handshake.query);
+
+    if (userId) {
+      await setOnline(userId, socket.id);
+
+      // notify all online contacts that this user is now online
+      const contactSocketIds = await getOnlineContactSocketIds(userId);
+      contactSocketIds.forEach((socketId) => {
+        io.to(socketId).emit('userStatus', { userId, isOnline: true });
+      });
+    }
+
+    // frontend emits this every 60s to keep the Redis TTL alive
+    socket.on('heartbeat', async () => {
+      if (userId) await refreshHeartbeat(userId);
+    });
 
     // payload: { userId, currentUserId }
-    // Creates or fetches direct conversation and joins its room
     socket.on('joinChat', async ({ userId, currentUserId }) => {
       try {
         const conversation = await getOrCreateDirectConversation(userId, currentUserId);
@@ -53,8 +70,17 @@ const initSocket = (httpServer) => {
       }
     });
 
-    socket.on('disconnect', () => {
-      console.log(`Socket disconnected: ${socket.id}`);
+    socket.on('disconnect', async () => {
+      console.log(`Socket disconnected: ${socket.id} | user: ${userId}`);
+      if (userId) {
+        await setOffline(userId);
+
+        // notify all online contacts that this user is now offline
+        const contactSocketIds = await getOnlineContactSocketIds(userId);
+        contactSocketIds.forEach((socketId) => {
+          io.to(socketId).emit('userStatus', { userId, isOnline: false });
+        });
+      }
     });
   });
 

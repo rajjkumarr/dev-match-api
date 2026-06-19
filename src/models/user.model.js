@@ -50,6 +50,10 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    lastSeenAt: {
+      type: Date,
+      default: null,
+    },
     refreshToken: {
       type: String,
       select: false,
